@@ -288,6 +288,11 @@
 const ADMIN_PIN = "1234";
 const WHATSAPP_NUMBER = "201020299876";
 
+/* رابط تخزين الأسعار المشترك (نفس الرابط لكل الزوار).
+   لازم تحطه بعد ما تعمل الخطوة الموضحة في تعليمات الإعداد. مثال:
+   const SHARED_PRICES_URL = "https://jsonblob.com/api/jsonBlob/68abc123..."; */
+const SHARED_PRICES_URL = "https://jsonblob.com/api/jsonBlob/01a02b7b-ee42-7a0a-a17c-4c5673fae35b";
+
 const DEFAULT_DATA = {
   fawry: [
     { id:"f12", length:"12 متر", rollPrice:4.15, cartonSize:400, cartonPrice:1660 },
@@ -307,15 +312,57 @@ const DEFAULT_DATA = {
   ]
 };
 
-let DATA = loadPrices();
+let DATA = loadCachedPrices();
 let cart = {}; // id -> qty
+let PRICES_READY = false; // true بعد ما تتحمل الأسعار الحقيقية من السيرفر المشترك
 
-function loadPrices(){
+// نسخة سريعة (محفوظة محلياً) تظهر فوراً لحد ما ييجي رد السيرفر المشترك
+function loadCachedPrices(){
   try{
     const saved = localStorage.getItem("raya_prices");
     if(saved) return JSON.parse(saved);
   }catch(e){}
   return JSON.parse(JSON.stringify(DEFAULT_DATA));
+}
+
+// تحميل الأسعار الحقيقية من التخزين المشترك (لو متظبط)، وإلا استخدام النسخة المحلية
+async function loadSharedPrices(){
+  if(!SHARED_PRICES_URL){
+    PRICES_READY = true;
+    return;
+  }
+  try{
+    const res = await fetch(SHARED_PRICES_URL, {cache:"no-store"});
+    if(!res.ok) throw new Error("fetch failed");
+    const data = await res.json();
+    if(data && data.fawry && data.cashier){
+      DATA = data;
+      try{ localStorage.setItem("raya_prices", JSON.stringify(DATA)); }catch(e){}
+    }
+  }catch(e){
+    console.warn("تعذّر تحميل الأسعار المشتركة، هنستخدم آخر نسخة متاحة.", e);
+  }
+  PRICES_READY = true;
+  renderGrids();
+  if(document.getElementById("adminOverlay")?.classList.contains("open")) renderAdminFields();
+}
+
+// حفظ الأسعار في التخزين المشترك عشان تظهر لكل اللي يفتحوا الرابط
+async function pushSharedPrices(data){
+  try{ localStorage.setItem("raya_prices", JSON.stringify(data)); }catch(e){}
+  if(!SHARED_PRICES_URL) return {ok:false, reason:"no-url"};
+  try{
+    const res = await fetch(SHARED_PRICES_URL, {
+      method:"PUT",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(data)
+    });
+    if(!res.ok) throw new Error("save failed");
+    return {ok:true};
+  }catch(e){
+    console.error("تعذّر حفظ الأسعار في التخزين المشترك.", e);
+    return {ok:false, reason:"network"};
+  }
 }
 
 function money(n){
@@ -602,25 +649,36 @@ function updateAdminRow(key, idx, field, value){
   if(cell) cell.value = DATA[key][idx].cartonPrice;
 }
 
-function savePrices(){
-  try{
-    localStorage.setItem("raya_prices", JSON.stringify(DATA));
-  }catch(e){}
+async function savePrices(){
+  const saveBtn = document.querySelector(".save-btn");
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = "جاري الحفظ..."; }
+
+  const result = await pushSharedPrices(DATA);
+
+  if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = "حفظ التعديلات"; }
   renderGrids();
   closeAdmin();
-  alert("تم حفظ الأسعار الجديدة.");
+
+  if(!SHARED_PRICES_URL){
+    alert("تم الحفظ في متصفحك فقط. لتفعيل مشاركة السعر مع كل الزوار، لازم تظبط SHARED_PRICES_URL أول مرة (شوف تعليمات الإعداد).");
+  } else if(result.ok){
+    alert("تم حفظ الأسعار الجديدة، وهتظهر لكل اللي يفتحوا رابط الموقع.");
+  } else {
+    alert("تم الحفظ في متصفحك، لكن حصل خطأ في مزامنة السعر مع باقي الزوار. حاول تاني وتأكد إن الإنترنت شغال.");
+  }
 }
 
-function resetPrices(){
+async function resetPrices(){
   if(!confirm("هل تريد استرجاع الأسعار الأصلية؟")) return;
   DATA = JSON.parse(JSON.stringify(DEFAULT_DATA));
-  try{ localStorage.removeItem("raya_prices"); }catch(e){}
+  await pushSharedPrices(DATA);
   renderAdminFields();
   renderGrids();
 }
 
-renderGrids();
+renderGrids();  // عرض فوري بآخر نسخة متاحة محلياً (سريع، من غير ما ينتظر السيرفر)
 renderCart();
+loadSharedPrices(); // بعدين تحديث بالسعر الحقيقي المشترك من السيرفر
 </script>
 </body>
 </html>
